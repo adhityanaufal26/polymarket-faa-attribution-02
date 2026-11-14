@@ -1,55 +1,69 @@
-# Polymarket FAA attribution forecast — quantile forecaster
+# polymarket-faa-attribution-02 — v2
 
-Entry for make.fun's `polymarket-faa-attribution-02` (and `-01`) competition:
-forecast the Yes price of every market of Polymarket's FAA outage attribution
-family at every minute of the 4 hours after a checkpoint, as five quantiles
-(5%, 25%, 50%, 75%, 95%) per minute.
+Forecast the Yes price of each market of Polymarket's FAA outage
+attribution family, 240 minutes ahead, as five quantiles
+(5%, 25%, 50%, 75%, 95%) per market per minute. Score: mean pinball
+loss, lower is better.
+
+## Model
+
+Persistence median with a locally calibrated, asymmetric spread
+(`main.py`, Python 3.13 stdlib only, deterministic, no network):
+
+```
+q_tau(h) = clamp(x + Z[tau] * sigma * sqrt(h), 0, 1)   # 6 decimals
+```
+
+- `x` = the market's Yes price at the checkpoint.
+- `sigma` = mean absolute 1-minute change over the last 120 minutes
+  blended 85/15 with the last 720 minutes, x1.8, floored 0.0004,
+  capped 0.005 per sqrt-minute. A quiet market gets a tight forecast;
+  a jumping market gets a wide one.
+- `Z = [-1.8, -0.75, 0, 0.25, 1.6]`, asymmetric: the 5% tail sits
+  further out than the 95% tail, and the 25% quantile sits closer to
+  the median than the 75% one. These prices are probabilities of
+  mutually exclusive outcomes, and the short-horizon move distribution
+  is a point mass at "no move" with occasional jumps.
+
+## What was tried and rejected
+
+Everything below was scored with a local scorer that reproduces the
+v1 entry's per-case pinball exactly (p00 0.432115, p01 0.305225,
+p02 0.354811, p03 0.251082, p04 0.201250; actuals for a case taken
+from the following case's input file, p05's actuals not in the kit).
+
+- Drift / trend-following medians (constant drift, linear-slope
+  extrapolation, mean reversion to the trailing mean, reversion of the
+  cross-market price sum toward 1.0): all worse on held-out cases.
+  The median is plain persistence.
+- Empirical quantiles of historical forward changes (pooled, and
+  matched on price level): much worse (0.44–0.50) — pooled history
+  is dominated by the early regime when markets decayed from their
+  0.485 opening midpoint; only the recent realised volatility is
+  regime-current.
+- Volatility variants (EWMA, 60/240-min MAD, 90th-percentile |move|,
+  level-dependent multipliers, horizon exponents 0.3–0.7,
+  horizon-dependent inner/outer z shaping): all within noise of v1,
+  none better on both splits.
+
+## Practice results (mean pinball, item-weighted)
+
+| model | p00 | p01 | p02 | p03 | p04 | mean (p00–p04) |
+|---|---|---|---|---|---|---|
+| v1 (Z=[-2.5,-0.75,0,0.45,1.6]) | 0.432115 | 0.305225 | 0.354811 | 0.251082 | 0.201250 | 0.3015 |
+| **v2 (this entry)** | **0.424345** | **0.299179** | **0.356786** | **0.245086** | **0.195238** | **0.2966** |
+
+Tuned on p00–p02 (0.3641 → 0.3601), confirmed on held-out p03–p04
+(0.2256 → 0.2196). The improvement is small but real and consistent
+(4 of 5 cases better); the ≤0.20 target was not reachable — most of
+the loss is irreducible price movement over 240 minutes, and every
+structurally different model tested scored worse.
 
 ## Run
 
 ```
-python3 main.py
+mkdir -p out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 main.py
 ```
 
-Reads every `<id>.in` in `$MAKEFUN_INPUT_DIR` (default `/input`) and writes
-`<id>.out` to `$MAKEFUN_OUTPUT_DIR` (default `/output`). Python 3.13,
-standard library only, no network, deterministic, ~0.05 s per case.
-
-## Model
-
-See the docstring in `main.py`. In short, per market:
-
-- **Median: the last price** (persistence). Recent trends do not extrapolate.
-- **Spread: the market's own recent realised volatility** — mean absolute
-  1-minute change over the last 120 minutes (85%) blended with the last
-  720 minutes (15%), times 1.8, floored at 0.0004 and capped at 0.005
-  price units per sqrt-minute. The 72-hour window's long-run changes are
-  deliberately not used: they are dominated by rare multi-day regime moves
-  and make the forecast far too wide.
-- **Shape: asymmetric offsets widening with sqrt(h)** —
-  `z = [-2.5, -0.75, 0, 0.45, 1.6]`. Middle quantiles sit close to the last
-  price (the price usually does not move), tails reach far out (jumps
-  happen), and the downside tail is wider than the upside (in a
-  multi-candidate event most markets decay toward 0 and only one rises
-  toward 1).
-- All quantiles are clamped to `[0, 1]`, rows are non-decreasing, values
-  rounded to 6 decimals.
-
-## Practice score (local, p00–p04)
-
-Actuals for p00–p04 are recovered from the following case's input file
-(each case is 240 minutes after the previous one).
-
-| model | mean pinball loss |
-|---|---|
-| this entry | **0.301498** |
-| house persistence baseline (σ = 0.0025) | 0.392518 |
-
-Per case: p00 0.432115, p01 0.305225, p02 0.354811, p03 0.251082,
-p04 0.201250 — the entry beats the baseline on every case. (The house
-reports the baseline at 0.363589 over all six practice cases; p05's
-actuals are not in the kit.)
-
-## License
-
-MIT — see `LICENSE`.
+Reads every `<id>.in` in the input directory, writes `<id>.out`
+(`{"forecasts": [{"id", "q": [[...5 quantiles...] x 240]}]}`) per case.
