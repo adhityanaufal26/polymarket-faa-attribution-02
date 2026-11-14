@@ -12,6 +12,11 @@
 // to later checkpoints, and shrinking them is the variance-reducing choice.
 // Practice (p00-p04): pinball 0.2903; held-out (p03-p04): 0.2155. House baseline: 0.3925 / 0.3330.
 //
+// Diagnostic behind the shrinkage: the empirical Z on the held-out cases is much narrower than
+// on the tune cases (low-price z95 0.5-1.7 vs 3.8-5.3; high-price z50 -0.2/-0.3 vs -1.0/-1.1) —
+// the event calmed down over its 24 h, so early-case calibration overstates later volatility.
+// The recency weights 1-2-4 and the sd60 activity term adapt to that; the shrinkage is the guard.
+//
 // Reads every <id>.in in the input directory (the grader runs one case at a time) and writes
 // <id>.out to the output directory. Offline, deterministic, no network.
 
